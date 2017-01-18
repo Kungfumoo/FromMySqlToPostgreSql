@@ -290,14 +290,14 @@ class FromMySqlToPostgreSql
     {
         if (empty($this->mysql)) {
             $arrSrcInput = explode(',', $this->strSourceConString);
-            $this->mysql = new \PDO($arrSrcInput[0], $arrSrcInput[1], $arrSrcInput[2]);
+            $this->mysql = new \PDO($arrSrcInput[0], $arrSrcInput[1], urldecode($arrSrcInput[2]));
             $this->mysql->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
             $this->mysql->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         }
 
         if (empty($this->pgsql)) {
             $arrDestInput = explode(',', $this->strTargetConString);
-            $this->pgsql  = new \PDO($arrDestInput[0], $arrDestInput[1], $arrDestInput[2]);
+            $this->pgsql  = new \PDO($arrDestInput[0], $arrDestInput[1], urldecode($arrDestInput[2]));
             $this->pgsql->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
             $this->pgsql->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
         }
@@ -758,6 +758,7 @@ class FromMySqlToPostgreSql
             $sql                = 'SHOW FULL COLUMNS FROM `' . $strTableName . '`;';
             $stmt               = $this->mysql->query($sql);
             $arrColumns         = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+            $arrColumns         = $this->sortAndFilterBasedOnPgSql($arrColumns, $strTableName);
             $strSelectFieldList = $this->arrangeColumnsData($arrColumns);
             unset($sql, $stmt, $arrColumns);
             // End field list for SELECT from MySQL.
@@ -1611,5 +1612,41 @@ class FromMySqlToPostgreSql
           \A (?&json) \Z
           /six
         ';
+    }
+
+    /**
+     * @param array $fields
+     * @param string $table
+     * @return array
+     */
+    private function sortAndFilterBasedOnPgSql(array $fields, $table)
+    {
+        $sql = "SELECT column_name FROM information_schema.columns WHERE table_name='{$table}'";
+
+        if ($result = $this->pgsql->query($sql)) {
+            $pgFields = $result->fetchAll(\PDO::FETCH_COLUMN, 0);
+
+            $sorted = false;
+            while (!$sorted) {
+                $sorted = true;
+
+                for ($p = 0; $p < count($pgFields); $p++) {
+                    for ($f = 0; $f < count($fields); $f++) {
+                        if ($pgFields[$p] == $fields[$f]['Field']) {
+                            if ($p == $f) { //They're in the same place
+                                break;
+                            } else { //They're not
+                                $temp = $fields[$p];
+                                $fields[$p] = $fields[$f];
+                                $fields[$f] = $temp;
+                                $sorted = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return $fields;
     }
 }
