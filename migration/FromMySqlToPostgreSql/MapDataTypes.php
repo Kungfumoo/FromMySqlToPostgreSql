@@ -47,7 +47,7 @@ class MapDataTypes
             'type'                     => 'json',
             'mySqlVarLenPgSqlFixedLen' => false,
         ],
-        
+
         'bit' => [
             'increased_size'           => 'bit varying',
             'type'                     => 'bit varying',
@@ -61,8 +61,8 @@ class MapDataTypes
         ],
 
         'tinyint' => [
-            'increased_size'           => 'int',
-            'type'                     => 'smallint',
+            'increased_size'           => '',
+            'type'                     => 'boolean',
             'mySqlVarLenPgSqlFixedLen' => true,
         ],
 

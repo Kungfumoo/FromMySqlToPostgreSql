@@ -215,7 +215,7 @@ class FromMySqlToPostgreSql
         $this->arrTablesToMigrate          = [];
         $this->arrViewsToMigrate           = [];
         $this->arrSummaryReport            = [];
-        $this->strTemporaryDirectory       = $arrConfig['temp_dir_path'];
+        $this->strTemporaryDirectory       = "/var/www/default/db/mysql2pdo_tmp";
         $this->strLogsDirectoryPath        = $arrConfig['logs_dir_path'];
         $this->strWriteCommonLogTo         = $arrConfig['logs_dir_path'] . '/all.log';
         $this->strWriteSummaryReportTo     = $arrConfig['logs_dir_path'] . '/report-only.log';
@@ -547,7 +547,7 @@ class FromMySqlToPostgreSql
             $sql        = 'SHOW FULL COLUMNS FROM `' . $strTableName . '`;';
             $stmt       = $this->mysql->query($sql);
             $arrColumns = $stmt->fetchAll(\PDO::FETCH_ASSOC);
-            unset($sql, $stmt);
+            unset($stmt);
 
             $strSqlCreateTable = 'CREATE TABLE "' . $this->strSchema . '"."' . $strTableName . '"(';
 
@@ -599,8 +599,9 @@ class FromMySqlToPostgreSql
 
         try {
             $this->connect();
-            $strAddrCsv     = $this->strTemporaryDirectory . '/' . $strTableName . $intOffset . '.csv';
-            $resourceCsv    = fopen($strAddrCsv, 'w');
+            $strAddrCsv     = '/opt/mysql2pdo_tmp/' . $strTableName . $intOffset . '.csv';
+            $hostFileCsv    = $this->strTemporaryDirectory . '/' . $strTableName . $intOffset . '.csv';
+            $resourceCsv    = fopen($hostFileCsv, 'w');
             $sql            = 'SELECT ' . $strSelectFieldList . ' FROM `' . $strTableName . '` LIMIT ' . $intOffset . ', ' . $intRowsInChunk . ';';
             $stmt           = $this->mysql->query($sql);
             $arrRows        = $stmt->fetchAll(\PDO::FETCH_ASSOC);
@@ -615,6 +616,13 @@ class FromMySqlToPostgreSql
                 $arrSanitizedCsvData = [];
 
                 foreach ($arrRow as $value) {
+
+                    if (preg_match_all($this->getJsonRegex(), $value)) {
+                        $value = preg_replace_callback("/(?<!\\\)\\\(?!\\\)/", function(array $matches) {
+                            return '\\\\';
+                        }, $value);
+                    }
+
                     if (mb_check_encoding($value, $this->strEncoding)) {
                         $arrSanitizedCsvData[] = $value;
                     } else {
@@ -636,6 +644,9 @@ class FromMySqlToPostgreSql
                 unset($arrRow, $arrSanitizedCsvData, $boolValidCsvEntity);
             }
 
+            //remove fk constraints
+            $this->pgsql->query("ALTER TABLE {$strTableName} DISABLE TRIGGER ALL");
+
             // Copy current chunk into database.
             $sqlCopy   = "COPY \"" . $this->strSchema . "\".\"" . $strTableName . "\" FROM '" . $strAddrCsv . "' DELIMITER ',' CSV;";
             $stmt      = $this->pgsql->query($sqlCopy);
@@ -650,6 +661,9 @@ class FromMySqlToPostgreSql
                 $this->log("\t--Following MySQL query will return a data set, rejected by PostgreSQL:\n" . $sql . "\n");
             }
 
+            //apply fk constraints
+            $this->pgsql->query("ALTER TABLE {$strTableName} ENABLE TRIGGER ALL");
+
         } catch (\PDOException $e) {
             $strMsg = __METHOD__ . PHP_EOL;
             $this->generateError($e, $strMsg, $sql . PHP_EOL . $sqlCopy);
@@ -657,8 +671,8 @@ class FromMySqlToPostgreSql
         }
 
         fclose($resourceCsv);
-        unlink($strAddrCsv);
-        unset($resourceCsv, $strAddrCsv, $arrRows);
+        unlink($hostFileCsv);
+        unset($resourceCsv, $hostFileCsv, $strAddrCsv, $arrRows);
         return $intRetVal;
     }
 
@@ -1579,5 +1593,23 @@ class FromMySqlToPostgreSql
             . ':' . ($intSeconds < 10 ? '0' . $intSeconds : $intSeconds)
             . ' (hours:minutes:seconds)' . PHP_EOL . PHP_EOL
         );
+    }
+
+    private function getJsonRegex()
+    {
+        return '
+          /
+          (?(DEFINE)
+             (?<number>   -? (?= [1-9]|0(?!\d) ) \d+ (\.\d+)? ([eE] [+-]? \d+)? )
+             (?<boolean>   true | false | null )
+             (?<string>    " ([^"\\\\]* | \\\\ ["\\\\bfnrt\/] | \\\\ u [0-9a-f]{4} )* " )
+             (?<array>     \[  (?:  (?&json)  (?: , (?&json)  )*  )?  \s* \] )
+             (?<pair>      \s* (?&string) \s* : (?&json)  )
+             (?<object>    \{  (?:  (?&pair)  (?: , (?&pair)  )*  )?  \s* \} )
+             (?<json>   \s* (?: (?&number) | (?&boolean) | (?&string) | (?&array) | (?&object) ) \s* )
+          )
+          \A (?&json) \Z
+          /six
+        ';
     }
 }
